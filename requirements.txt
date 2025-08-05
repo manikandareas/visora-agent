@@ -3,6 +3,7 @@ livekit-plugins-openai
 livekit-plugins-silero
 livekit-plugins-google
 livekit-plugins-noise-cancellation
+livekit-agents[turn-detector]~=1.0
 
 mem0ai
 duckduckgo-search

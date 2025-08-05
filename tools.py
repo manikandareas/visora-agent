@@ -53,9 +53,6 @@ async def control_camera(
             "event_id": str(uuid.uuid4())[:8]
         }
 
-        logging.info(f"Context: {context.session}")
-        logging.info(f"Userdata: {context.userdata}")
-
         async_supabase = await create_async_supabase()
         camera_channel = async_supabase.channel("visora_agent")
 

@@ -2,7 +2,8 @@ from dotenv import load_dotenv
 
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions
-from livekit.plugins import google, noise_cancellation
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import google, noise_cancellation, silero
 from prompts import AGENT_INSTRUCTION, SESSION_INSTRUCTION
 from tools import (
     search_web, 
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+def prewarm(proc: agents.JobProcess):
+    proc.userdata["vad"] = silero.VAD.load()
 
 class AssistiveAgent(Agent):
     def __init__(self) -> None:
@@ -26,7 +29,8 @@ class AssistiveAgent(Agent):
             llm=google.beta.realtime.RealtimeModel(
                 voice="Fenrir",
                 model="gemini-2.0-flash-live-001",
-                # model="",
+                # The best model for now, but very expensive
+                # model="gemini-2.5-flash-preview-native-audio-dialog",
             ),
             tools=[
                 search_web, 
@@ -42,7 +46,10 @@ async def entrypoint(ctx: agents.JobContext):
     """Main entry point for the agent"""
     try:
         # Initialize session
-        session = AgentSession()
+        session = AgentSession(
+                vad=ctx.proc.userdata["vad"],
+                turn_detection=MultilingualModel(),
+        )
         agent = AssistiveAgent()
         
         # Create user session in database
@@ -73,4 +80,6 @@ async def entrypoint(ctx: agents.JobContext):
 
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    agents.cli.run_app(
+        agents.WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm)
+    )
