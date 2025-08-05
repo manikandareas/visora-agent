@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+import requests
+import json
+
+API_TOKEN = "3a4337a9fbf1421f8f8bd653c4453987"
+
+# This function adds a person to the database
+def add_person(name, image_path, collections = ""):
+    if image_path.startswith("https://"):
+        files = {"photos": image_path}
+    else:
+        files = {"photos": open(image_path, "rb")}
+
+    response = requests.post(
+        url="https://api.luxand.cloud/v2/person",
+        headers={"token": API_TOKEN},
+        data={"name": name, "store": "1", "collections": collections},
+        files=files,
+    )
+
+    if response.status_code == 200:
+        person = response.json()
+
+        print("Added person", name, "with UUID", person["uuid"])
+        return person["uuid"]
+    else:
+        print("Can't add person", name, ":", response.text)
+        return None
+
+
+# This function recognizes a face in an image
+def recognize_face(image_path):
+    url = "https://api.luxand.cloud/photo/search/v2"
+    headers = {"token": API_TOKEN}
+
+    if image_path.startswith("https://"):
+        files = {"photo": image_path}
+    else:
+        files = {"photo": open(image_path, "rb")}
+
+    response = requests.post(url, headers=headers, files=files)
+    result = json.loads(response.text)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print("Can't recognize people:", response.text)
+        return None
+
+
+if __name__ == "__main__":
+    # Adding a person
+    person_uuid = add_person("John Smith", "face1.jpg", "Employees")
+    if person_uuid == None:
+        exit(1)
+
+    # Recognizing a face
+    recognized_people = recognize_face("face2.jpg")
+
+    print("Recognized people:", recognized_people)

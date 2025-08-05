@@ -19,3 +19,6 @@ opencv-python
 numpy
 asyncio-mqtt
 pydantic
+pytz
+timezonefinder
+geopy

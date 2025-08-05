@@ -9,7 +9,6 @@ from tools import (
     get_weather, 
     send_email, 
     control_camera, 
-    create_session
 )
 import logging
 import asyncio
@@ -27,13 +26,13 @@ class AssistiveAgent(Agent):
             llm=google.beta.realtime.RealtimeModel(
                 voice="Fenrir",
                 model="gemini-2.0-flash-live-001",
+                # model="",
             ),
             tools=[
                 search_web, 
                 get_weather, 
                 send_email, 
                 control_camera, 
-                create_session
             ]
         )
         self.session_id = None
@@ -47,8 +46,7 @@ async def entrypoint(ctx: agents.JobContext):
         agent = AssistiveAgent()
         
         # Create user session in database
-        user_id = f"user_{ctx.room.name}"  # Simple user ID based on room name
-        await create_session(context=ctx, user_id=user_id)
+        # user_id = f"user_{ctx.room.name}"  # Simple user ID based on room name
 
         await session.start(
             room=ctx.room,
@@ -66,7 +64,7 @@ async def entrypoint(ctx: agents.JobContext):
             instructions=SESSION_INSTRUCTION,
             allow_interruptions=True,
         )
-        
+
         logger.info("Agent session started successfully")
         
     except Exception as e:

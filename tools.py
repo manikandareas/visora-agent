@@ -8,7 +8,13 @@ import smtplib
 from email.mime.multipart import MIMEMultipart  
 from email.mime.text import MIMEText
 from typing import Optional
-from supabase import Client, create_client
+from supabase import Client, acreate_client, create_client
+import cv2
+import numpy as np
+from datetime import datetime
+import uuid
+import json
+import asyncio
 
 load_dotenv()
 
@@ -17,41 +23,9 @@ supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_ANON_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
 
-def get_session_id(context) -> str:
-    """
-    Generate consistent session ID based on context.
-    Handles both JobContext (from agent.py) and RunContext (from tool calls).
-    This ensures the same session ID is used across all functions.
-    """
-    import uuid
-
-    # Try to get room name - handle different context types
-    room_name = "default_room"
-    
-    # For JobContext (used in agent.py entrypoint)
-    if hasattr(context, 'room') and hasattr(context.room, 'name'):
-        room_name = context.room.name
-    # For RunContext (used in tool calls) - try different attributes
-    elif hasattr(context, 'room') and hasattr(context.room, 'name'):
-        room_name = context.room.name
-    elif hasattr(context, '_room_name'):
-        room_name = context._room_name
-    # Fallback: try to get room from any available attribute
-    else:
-        room_obj = getattr(context, 'room', None)
-        if room_obj and hasattr(room_obj, 'name'):
-            room_name = room_obj.name
-    
-    # Generate consistent UUID based on room name (same room = same session)
-    session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, room_name))
-    logging.info(f"Generated session ID: {session_id} for room: '{room_name}' (context type: {type(context).__name__})")
-    
-    # Additional debugging - log all context attributes
-    logging.debug(f"Context attributes: {[attr for attr in dir(context) if not attr.startswith('_')]}")
-    if hasattr(context, 'room'):
-        logging.debug(f"Room object: {context.room}, Room attributes: {[attr for attr in dir(context.room) if not attr.startswith('_')] if context.room else 'None'}")
-    
-    return session_id
+async def create_async_supabase():
+  supabase = await acreate_client(supabase_url, supabase_key)
+  return supabase
 
 @function_tool()
 async def control_camera(
@@ -60,82 +34,74 @@ async def control_camera(
     camera_type: str = "user"
 ) -> str:
     """
-    Control camera state (on/off/switch) and update database.
+    Control camera state (on/off/switch) using Supabase Realtime Broadcast.
+    Sends real-time events to frontend for immediate camera control.
     
     Args:
         action: "on", "off", or "switch"
         camera_type: "user" (front) or "environment" (back)
+    
+    Returns:
+        Status message confirming camera control action
     """
     try:
-        # Get consistent session ID
-        session_id = get_session_id(context)
+        # Prepare broadcast event payload
+        event_payload = {
+            "action": action,
+            "camera_type": camera_type,
+            "timestamp": datetime.now().isoformat(),
+            "event_id": str(uuid.uuid4())[:8]
+        }
+
+        logging.info(f"Context: {context.session}")
+        logging.info(f"Userdata: {context.userdata}")
+
+        async_supabase = await create_async_supabase()
+        camera_channel = async_supabase.channel("visora_agent")
+
+        await camera_channel.subscribe()
         
-        if not session_id:
-            return "Session tidak ditemukan. Silakan mulai sesi baru."
-        
-        # Check if session exists in database, create if it doesn't
-        try:
-            existing_session = supabase.table("sessions").select("id").eq("id", session_id).execute()
-            if not existing_session.data:
-                # Session doesn't exist, create it
-                logging.info(f"Session {session_id} not found, creating it...")
-                import uuid as uuid_lib
-                session_token = str(uuid_lib.uuid4())
-                
-                supabase.table("sessions").insert({
-                    "id": session_id,
-                    "user_id": f"user_auto_created",
-                    "session_token": session_token,
-                    "is_active": True,
-                    "updated_at": "NOW()"
-                }).execute()
-                
-                logging.info(f"Auto-created session {session_id}")
-        except Exception as session_check_error:
-            logging.error(f"Error checking/creating session: {session_check_error}")
-        
+        # Send broadcast event based on action
         if action == "on":
-            # Update camera state to enabled
-            result = supabase.table("camera_states").upsert({
-                "session_id": session_id,
-                "is_enabled": True,
-                "camera_type": camera_type,
-                "updated_at": "NOW()"
-            }, on_conflict="session_id").execute()
+            event_payload["message"] = "Camera activation requested"
+            event_payload["is_enabled"] = True
+
+            asyncio.create_task(camera_channel.send_broadcast(
+                "camera_states",
+                event_payload
+            ))
             
-            logging.info(f"Camera turned on for session {session_id}")
-            return "Kamera telah diaktifkan dan siap digunakan."
+            logging.info(f"Broadcast camera ON event: {event_payload}")
+            return "📹 Kamera telah diaktifkan dan siap digunakan. Event telah dikirim ke frontend."
             
         elif action == "off":
-            # Update camera state to disabled
-            result = supabase.table("camera_states").upsert({
-                "session_id": session_id,
-                "is_enabled": False,
-                "camera_type": camera_type,
-                "updated_at": "NOW()"
-            }, on_conflict="session_id").execute()
+            event_payload["message"] = "Camera deactivation requested"
+            event_payload["is_enabled"] = False
             
-            logging.info(f"Camera turned off for session {session_id}")
-            return "Kamera telah dimatikan."
+            asyncio.create_task(camera_channel.send_broadcast(
+                "camera_states",
+                event_payload
+            ))
+            
+            logging.info(f"Broadcast camera OFF event: {event_payload}")
+            return "📹 Kamera telah dimatikan. Event telah dikirim ke frontend."
             
         elif action == "switch":
-            # Get current camera state
-            current_state = supabase.table("camera_states").select("camera_type").eq("session_id", session_id).execute()
-
-            logging.info(f"Current camera state for session {session_id}: {current_state.data}")
+            # For switch, we don't need to query database - just send the switch event
+            # Frontend will handle the actual camera switching logic
+            new_camera_type = "environment" if camera_type == "user" else "user"
+            event_payload["new_camera_type"] = new_camera_type
+            event_payload["message"] = f"Camera switch requested: {camera_type} -> {new_camera_type}"
+            event_payload["is_enabled"] = True
             
-            new_camera_type = "environment" if current_state.data and current_state.data[0]["camera_type"] == "user" else "user"
-            
-            # Update camera type
-            result = supabase.table("camera_states").upsert({
-                "session_id": session_id,
-                "is_enabled": True,
-                "camera_type": new_camera_type,
-                "updated_at": "NOW()"
-            }, on_conflict="session_id").execute()
+            # Broadcast camera SWITCH event
+            asyncio.create_task(camera_channel.send_broadcast(
+                "camera_states",
+                event_payload
+            ))
             
             camera_name = "kamera belakang" if new_camera_type == "environment" else "kamera depan"
-            logging.info(f"Camera switched to {new_camera_type} for session {session_id}")
+            logging.info(f"Camera switched to {new_camera_type}")
             return f"Kamera telah diganti ke {camera_name}."
             
         else:
@@ -204,49 +170,6 @@ async def search_web(
         logging.error(f"Error searching the web for '{query}': {e}")
         return f"Terjadi kesalahan saat mencari informasi tentang '{query}'. Silakan coba lagi."
 
-
-@function_tool()
-async def create_session(
-    context: RunContext,
-    user_id: str
-) -> str:
-    """
-    Create a new user session in the database using participant identity.
-    """
-    try:
-        # Get consistent session ID (same as control_camera)
-        session_id = get_session_id(context)
-        
-        if not session_id:
-            return "Tidak dapat membuat sesi. Room tidak ditemukan."
-        
-        # Store user session info (matching actual schema)
-        import uuid as uuid_lib
-        session_token = str(uuid_lib.uuid4())
-        
-        result = supabase.table("sessions").upsert({
-            "id": session_id,
-            "user_id": user_id,
-            "session_token": session_token,
-            "is_active": True,
-            "updated_at": "NOW()"
-        }).execute()
-        
-        # Initialize camera state
-        supabase.table("camera_states").upsert({
-            "session_id": session_id,
-            "is_enabled": False,
-            "camera_type": "user",
-            "updated_at": "NOW()"
-        }).execute()
-        
-        logging.info(f"Session created/updated for participant: {session_id}")
-        return f"Sesi telah dibuat untuk pengguna: {user_id}"
-        
-    except Exception as e:
-        logging.error(f"Error creating session: {e}")
-        return "Terjadi kesalahan saat membuat sesi baru."
-
 @function_tool()    
 async def send_email(
     context: RunContext,  # type: ignore
@@ -312,5 +235,44 @@ async def send_email(
         logging.error(f"SMTP error occurred: {e}")
         return f"Email sending failed: SMTP error - {str(e)}"
     except Exception as e:
-        logging.error(f"Error sending email: {e}")
-        return f"An error occurred while sending email: {str(e)}"
+        logging.error(f"Failed to send email: {str(e)}")
+        return f"Failed to send email: {str(e)}"
+
+
+
+
+def get_session_id(context) -> str:
+    """
+    Generate consistent session ID based on context.
+    Handles both JobContext (from agent.py) and RunContext (from tool calls).
+    This ensures the same session ID is used across all functions.
+    """
+    import uuid
+
+    # Try to get room name - handle different context types
+    room_name = "default_room"
+    
+    # For JobContext (used in agent.py entrypoint)
+    if hasattr(context, 'room') and hasattr(context.room, 'name'):
+        room_name = context.room.name
+    # For RunContext (used in tool calls) - try different attributes
+    elif hasattr(context, 'room') and hasattr(context.room, 'name'):
+        room_name = context.room.name
+    elif hasattr(context, '_room_name'):
+        room_name = context._room_name
+    # Fallback: try to get room from any available attribute
+    else:
+        room_obj = getattr(context, 'room', None)
+        if room_obj and hasattr(room_obj, 'name'):
+            room_name = room_obj.name
+    
+    # Generate consistent UUID based on room name (same room = same session)
+    session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, room_name))
+    logging.info(f"Generated session ID: {session_id} for room: '{room_name}' (context type: {type(context).__name__})")
+    
+    # Additional debugging - log all context attributes
+    logging.debug(f"Context attributes: {[attr for attr in dir(context) if not attr.startswith('_')]}")
+    if hasattr(context, 'room'):
+        logging.debug(f"Room object: {context.room}, Room attributes: {[attr for attr in dir(context.room) if not attr.startswith('_')] if context.room else 'None'}")
+    
+    return session_id
