@@ -3,6 +3,7 @@ livekit-plugins-openai
 livekit-plugins-silero
 livekit-plugins-google
 livekit-plugins-noise-cancellation
+
 mem0ai
 duckduckgo-search
 langchain_community
@@ -10,3 +11,11 @@ requests
 python-dotenv
 resend
 
+
+# New dependencies for enhanced features
+supabase
+Pillow
+opencv-python
+numpy
+asyncio-mqtt
+pydantic
