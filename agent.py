@@ -1,15 +1,18 @@
 from dotenv import load_dotenv
 
+from google.genai import types
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from livekit.plugins import google, noise_cancellation, silero
+from livekit.plugins import google, noise_cancellation, silero, openai, deepgram,rime
 from prompts import AGENT_INSTRUCTION, SESSION_INSTRUCTION
 from tools import (
     search_web, 
     get_weather, 
     send_email, 
-    control_camera, 
+    camera_on,
+    camera_off,
+    switch_camera,
 )
 import logging
 import asyncio
@@ -28,15 +31,29 @@ class AssistiveAgent(Agent):
             instructions=AGENT_INSTRUCTION,
             llm=google.beta.realtime.RealtimeModel(
                 voice="Fenrir",
-                model="gemini-2.0-flash-live-001",
-                # The best model for now, but very expensive
+                # so far this model is fucking good at calling tools, and great for vision
+                model="gemini-live-2.5-flash-preview",
+                # The best model for now, but very expensive, bad for calling tools
                 # model="gemini-2.5-flash-preview-native-audio-dialog",
+                # Best for speech and vision, bad for calling tools
+                # model="gemini-2.5-flash-exp-native-audio-thinking-dialog",
             ),
+            # Fuckk this model is fucking good at calling tools, but nope for vision
+            # llm=openai.realtime.RealtimeModel(
+            #     model="gpt-4o-realtime-preview",
+            #     voice="sage",
+            #     modalities=["audio", "text"]
+            # ),
+            # stt= deepgram.STT(),
+            # tts= rime.TTS(),
+            vad=silero.VAD.load(),
             tools=[
                 search_web, 
                 get_weather, 
                 send_email, 
-                control_camera, 
+                camera_on,
+                camera_off,
+                switch_camera,
             ]
         )
         self.session_id = None
@@ -52,9 +69,6 @@ async def entrypoint(ctx: agents.JobContext):
         )
         agent = AssistiveAgent()
         
-        # Create user session in database
-        # user_id = f"user_{ctx.room.name}"  # Simple user ID based on room name
-
         await session.start(
             room=ctx.room,
             agent=agent,
