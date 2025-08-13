@@ -1,8 +1,12 @@
 from dotenv import load_dotenv
 
 from google.genai import types
+from PIL import Image
+from livekit.agents.llm import ImageContent
+import numpy as np
+
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions
+from livekit.agents import AgentSession, Agent, ChatContext, ChatMessage, RoomInputOptions
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.plugins import google, noise_cancellation, silero, openai, deepgram,rime
 from prompts import AGENT_INSTRUCTION, SESSION_INSTRUCTION
@@ -30,7 +34,7 @@ class AssistiveAgent(Agent):
         super().__init__(
             instructions=AGENT_INSTRUCTION,
             llm=google.beta.realtime.RealtimeModel(
-                voice="Fenrir",
+                voice="Leda",
                 # so far this model is fucking good at calling tools, and great for vision
                 model="gemini-live-2.5-flash-preview",
                 # The best model for now, but very expensive, bad for calling tools
@@ -40,12 +44,13 @@ class AssistiveAgent(Agent):
             ),
             # Fuckk this model is fucking good at calling tools, but nope for vision
             # llm=openai.realtime.RealtimeModel(
-            #     model="gpt-4o-realtime-preview",
+            #     model="gpt-4o-realtime-preview-2025-06-03",
             #     voice="sage",
             #     modalities=["audio", "text"]
             # ),
             # stt= deepgram.STT(),
             # tts= rime.TTS(),
+
             vad=silero.VAD.load(),
             tools=[
                 search_web, 
@@ -56,8 +61,22 @@ class AssistiveAgent(Agent):
                 switch_camera,
             ]
         )
-        self.session_id = None
-        self.last_frame_analysis = None
+        self._latest_frame = None
+        self._video_stream = None
+        self._tasks = []
+        
+    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        if self._latest_frame:
+            # Tambahkan ke konten pesan (sesuai implementasi aslinya)
+            new_message.content.append(ImageContent(image=self._latest_frame))
+
+            # Convert VideoFrame ke NumPy array (asumsi frame RGB)
+            frame_array = self._latest_frame.to_ndarray(format="rgb24")  # bisa juga 'bgr24'
+
+            # Konversi ke Image dan simpan
+            image = Image.fromarray(frame_array)
+            image.save("latest_frame.png")  # Simpan ke file
+
 
 async def entrypoint(ctx: agents.JobContext):
     """Main entry point for the agent"""
@@ -68,7 +87,7 @@ async def entrypoint(ctx: agents.JobContext):
                 turn_detection=MultilingualModel(),
         )
         agent = AssistiveAgent()
-        
+
         await session.start(
             room=ctx.room,
             agent=agent,
